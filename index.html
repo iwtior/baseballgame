@@ -2,195 +2,198 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Realistic Baseball JS</title>
+    <title>Pro Batting Simulator</title>
     <style>
-        :root { --field-green: #1b5e20; --dirt-brown: #795548; }
-        body { background: #333; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; overflow: hidden; }
+        :root { --field-green: #2e7d32; --dirt: #8d6e63; }
+        body { background: #222; color: white; font-family: 'Hiragino Kaku Gothic ProN', sans-serif; display: flex; flex-direction: column; align-items: center; margin: 0; overflow: hidden; }
         
-        #game-container { position: relative; width: 400px; height: 600px; background: var(--field-green); border: 4px solid #555; overflow: hidden; }
-        
-        /* 遠近感のあるマウンドとホーム */
-        #infield {
-            position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
-            width: 600px; height: 400px; background: var(--dirt-brown);
-            clip-path: polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%);
+        #game-container { position: relative; width: 500px; height: 600px; background: var(--field-green); border: 5px solid #444; cursor: none; } /* カーソルを消してバットを表示 */
+
+        /* スコアパネル */
+        #hud { position: absolute; top: 0; width: 100%; background: rgba(0,0,0,0.8); display: flex; justify-content: space-around; padding: 10px 0; z-index: 100; font-weight: bold; border-bottom: 2px solid #555; }
+        .stat-item { text-align: center; }
+        .val { color: #ffeb3b; font-size: 1.2rem; display: block; }
+
+        /* ストライクゾーン（捕手視点） */
+        #catcher-view {
+            position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+            width: 160px; height: 200px; background: rgba(0,0,0,0.2);
+            border: 3px solid rgba(255,255,255,0.5); z-index: 5;
         }
 
-        /* スコアボード */
-        #hud {
-            position: absolute; top: 10px; left: 10px; right: 10px;
-            background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px;
-            display: grid; grid-template-columns: 1fr 1fr; font-size: 14px; z-index: 10;
-        }
-
-        /* ボール（擬似3D） */
+        /* ボール */
         #ball {
-            position: absolute; width: 8px; height: 8px; background: #fff;
+            position: absolute; width: 10px; height: 10px; background: #fff;
             border-radius: 50%; display: none; transform: translate(-50%, -50%);
-            box-shadow: inset -2px -2px 2px rgba(0,0,0,0.2); z-index: 5;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.3); z-index: 10;
         }
 
-        /* バッターボックス目安 */
-        #strike-zone {
-            position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
-            width: 80px; height: 100px; border: 2px dashed rgba(255,255,255,0.3);
+        /* バット（マウス追従） */
+        #bat {
+            position: absolute; width: 80px; height: 15px; background: #d7ccc8;
+            border: 2px solid #5d4037; border-radius: 5px;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 20;
+            transition: transform 0.05s;
         }
+        .swinging { transform: translate(-50%, -50%) rotate(-30deg) scaleY(0.5) !important; }
 
         #message {
             position: absolute; top: 40%; width: 100%; text-align: center;
-            font-size: 3rem; font-weight: bold; text-shadow: 3px 3px 0 #000;
-            pointer-events: none; opacity: 0; z-index: 20;
+            font-size: 4rem; font-weight: bold; text-shadow: 4px 4px 0 #000;
+            pointer-events: none; opacity: 0; z-index: 200;
         }
-
-        #controls { margin-top: 15px; }
-        button {
-            padding: 15px 50px; font-size: 1.5rem; cursor: pointer;
-            background: #ff9800; border: none; border-radius: 5px; color: white;
-            box-shadow: 0 5px #e65100; font-weight: bold;
-        }
-        button:active { transform: translateY(3px); box-shadow: 0 2px #e65100; }
     </style>
 </head>
 <body>
 
 <div id="game-container">
     <div id="hud">
-        <div>SCORE: <span id="score">0</span></div>
-        <div>OUTS: <span id="outs">0</span></div>
-        <div>PITCH: <span id="pitch-type">-</span></div>
-        <div>SPEED: <span id="speed">-</span></div>
+        <div class="stat-item">SCORE<span id="score" class="val">0</span></div>
+        <div class="stat-item">OUTS<span id="outs" class="val">0</span></div>
+        <div class="stat-item">PITCH<span id="pitch-type" class="val">-</span></div>
+        <div class="stat-item">SPEED<span id="speed" class="val">-</span></div>
     </div>
     
-    <div id="infield"></div>
-    <div id="strike-zone"></div>
+    <div id="catcher-view"></div>
     <div id="ball"></div>
+    <div id="bat"></div>
     <div id="message">HIT!</div>
 </div>
 
-<div id="controls">
-    <button id="swing-btn">SWING</button>
-</div>
+<p style="color: #aaa; margin-top: 10px;">マウスを動かして狙い、左クリックでスイング！</p>
 
 <script>
+    const container = document.getElementById('game-container');
     const ball = document.getElementById('ball');
+    const bat = document.getElementById('bat');
     const scoreEl = document.getElementById('score');
     const outsEl = document.getElementById('outs');
     const speedEl = document.getElementById('speed');
     const pitchEl = document.getElementById('pitch-type');
     const messageEl = document.getElementById('message');
-    const swingBtn = document.getElementById('swing-btn');
 
-    let state = {
-        score: 0, outs: 0, 
-        isPitching: false,
-        x: 200, y: 150, z: 0, // zを奥行きとして使用
+    let game = {
+        score: 0, outs: 0, isPitching: false,
+        bx: 250, by: 200, bz: 0, 
         vx: 0, vy: 0, vz: 0,
-        ballSize: 8
+        batX: 250, batY: 450
     };
 
-    function initPitch() {
-        if (state.outs >= 3 || state.isPitching) return;
+    // マウス移動でバットを動かす
+    container.addEventListener('mousemove', (e) => {
+        const rect = container.getBoundingClientRect();
+        game.batX = e.clientX - rect.left;
+        game.batY = e.clientY - rect.top;
         
-        state.isPitching = true;
-        state.z = 0;
-        state.x = 200;
-        state.y = 180;
+        // バットの位置を更新
+        bat.style.left = game.batX + 'px';
+        bat.style.top = game.batY + 'px';
+    });
+
+    function startPitch() {
+        if (game.outs >= 3 || game.isPitching) return;
         
-        // 球速と球種の設定
+        game.isPitching = true;
+        game.bz = 0;
+        game.bx = 250; 
+        game.by = 220;
+        
         const types = [
-            { name: 'STRAIGHT', vz: 5, vx: 0 },
-            { name: 'CURVE', vz: 3.5, vx: 1.5 },
-            { name: 'SHOOT', vz: 4, vx: -1.2 }
+            { name: 'STRAIGHT', vz: 6, vx: 0, vy: 1.5 },
+            { name: 'CURVE', vz: 4, vx: 1.8, vy: 2.5 },
+            { name: 'SHOOT', vz: 5, vx: -1.5, vy: 1.8 },
+            { name: 'SINKER', vz: 4.5, vx: 0.5, vy: 4 }
         ];
         const type = types[Math.floor(Math.random() * types.length)];
         
-        state.vz = type.vz + Math.random() * 2;
-        state.vx = type.vx;
-        state.vy = 2.5; // 重力・軌道の影響
+        game.vx = type.vx;
+        game.vy = type.vy;
+        game.vz = type.vz + (Math.random() * 2);
         
         pitchEl.textContent = type.name;
-        speedEl.textContent = Math.floor(state.vz * 30) + "km";
+        speedEl.textContent = Math.floor(game.vz * 28) + "km";
         
         ball.style.display = 'block';
-        updateBallFrame();
+        update();
     }
 
-    function updateBallFrame() {
-        if (!state.isPitching) return;
+    function update() {
+        if (!game.isPitching) return;
 
-        state.z += state.vz;
-        state.x += state.vx;
-        state.y += state.vy;
+        game.bz += game.vz;
+        game.bx += game.vx;
+        game.by += game.vy;
         
-        // 遠近感の表現
-        state.ballSize = 8 + (state.z * 0.15); 
-        
-        ball.style.left = state.x + 'px';
-        ball.style.top = state.y + 'px';
-        ball.style.width = state.ballSize + 'px';
-        ball.style.height = state.ballSize + 'px';
+        let displaySize = 10 + (game.bz * 0.3); 
+        ball.style.left = game.bx + 'px';
+        ball.style.top = game.by + 'px';
+        ball.style.width = displaySize + 'px';
+        ball.style.height = displaySize + 'px';
 
-        if (state.z < 150) {
-            requestAnimationFrame(updateBallFrame);
+        if (game.bz < 150) {
+            requestAnimationFrame(update);
         } else {
-            finishPlay("STRIKE");
+            finish("STRIKE");
         }
     }
 
-    function swing() {
-        if (!state.isPitching || state.z < 80) return; // あまりに早すぎると空振り
+    container.addEventListener('mousedown', () => {
+        if (!game.isPitching || game.bz < 100) return;
 
-        const timing = state.z; // 120-140あたりがジャストミート
-        const accuracy = Math.abs(state.x - 200);
+        // スイングアニメーション
+        bat.classList.add('swinging');
+        setTimeout(() => bat.classList.remove('swinging'), 150);
 
-        state.isPitching = false;
+        const dist = Math.sqrt(Math.pow(game.bx - game.batX, 2) + Math.pow(game.by - game.batY, 2));
+        const timing = game.bz; 
 
-        if (timing > 115 && timing < 145 && accuracy < 30) {
-            const power = Math.random();
-            if (power > 0.8) {
-                state.score += 1;
-                finishPlay("HOMERUN!!");
-            } else if (power > 0.3) {
-                state.score += 1;
-                finishPlay("HIT!");
+        game.isPitching = false;
+
+        // タイミング(125-145)と距離(バットの当たり判定35px以内)
+        if (timing > 120 && timing < 150 && dist < 40) {
+            const result = Math.random();
+            if (dist < 15 && result > 0.6) {
+                game.score += 1;
+                finish("HOMERUN!!");
+            } else if (dist < 30) {
+                game.score += 1;
+                finish("HIT!");
             } else {
-                state.outs += 1;
-                finishPlay("OUT...");
+                game.outs += 1;
+                finish("OUT...");
             }
         } else {
-            finishPlay("MISS!");
+            finish("MISS!");
         }
         
-        updateHUD();
-    }
+        scoreEl.textContent = game.score;
+        outsEl.textContent = game.outs;
+    });
 
-    function finishPlay(txt) {
-        state.isPitching = false;
+    function finish(txt) {
+        game.isPitching = false;
         ball.style.display = 'none';
         messageEl.textContent = txt;
         messageEl.style.opacity = 1;
         
         setTimeout(() => {
             messageEl.style.opacity = 0;
-            if (state.outs >= 3) {
-                alert("GAME OVER! SCORE: " + state.score);
+            if (game.outs >= 3) {
+                alert("GAME OVER! スコア: " + game.score);
                 location.reload();
             } else {
-                initPitch();
+                initNext();
             }
-        }, 1200);
+        }, 1000);
     }
 
-    function updateHUD() {
-        scoreEl.textContent = state.score;
-        outsEl.textContent = state.outs;
+    function initNext() {
+        setTimeout(startPitch, 800);
     }
 
-    swingBtn.addEventListener('mousedown', swing);
-    window.addEventListener('keydown', (e) => { if(e.code === "Space") swing(); });
+    // 初球
+    setTimeout(startPitch, 1500);
 
-    // 開始
-    setTimeout(initPitch, 1000);
 </script>
 </body>
 </html>
